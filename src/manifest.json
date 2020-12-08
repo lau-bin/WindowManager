@@ -1,0 +1,48 @@
+{
+
+    "manifest_version": 2,
+    "name": "Window Manager",
+    "version": "1.0",
+   
+    "description": "Saves Windows to folders to view later.",
+  
+    "browser_specific_settings": {
+      "gecko": {
+        "id": "lautarocutri@gmail.com"
+      }
+    },
+
+    "background": {
+        "scripts": ["background.js"],
+        "persistent":true
+      },
+
+    "permissions": [
+        "tabs",
+        "storage",
+        "sessions",
+        "menus"
+      ],
+
+  "sidebar_action": {
+    "default_title" : "Windows",
+    "default_panel": "sidebar/sidebar.html",
+    "default_icon": {
+      "64": "icons/WWW.png"
+    }
+  },
+
+  "browser_action": {
+    "default_icon": {
+      "64": "icons/WWW.png"
+    }
+  },
+  
+  "web_accessible_resources": [
+    "icons/WWW.png",
+    "icons/archived.png",
+    "icons/openButton.png",
+    "icons/closeButton.png"
+  ]
+  
+  }
