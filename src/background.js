@@ -65,6 +65,7 @@ Object.defineProperty(this, "SWType", {
 })
 
 var windowMap //Map
+var generalWindowMap = new Map()//Map
 var idList = [] //save all ids to find available when needed
 var callBackList = [] //Callbacks from sidebars requesting data
 var windowToRestore = null
@@ -180,6 +181,7 @@ function deleteTab(tabId, windowTempId) {
 
 }
 
+
 //Add tab from list and storage
 function addtab(tab, savedWindowId) {
   let window = windowMap.get(tab.windowId)
@@ -267,6 +269,10 @@ function fireEvent(element, event) {
 
 function tabClosedProcedure(tabId, windowId, savedWindowId){
   deleteTab(tabId, windowId)
+  removeTabFromDom(savedWindowId, tabId)
+}
+
+function removeTabFromDom(savedWindowId, tabId){
   let elementArray = tabEventMap.get(savedWindowId).get(tabId)
   let length = elementArray.length;
   for (let i = 0; i < length; i++) {
@@ -283,6 +289,8 @@ function tabClosedProcedure(tabId, windowId, savedWindowId){
     elementArray.shift()
   }
 }
+
+
 
 function setEventHandlers() {
 
@@ -450,10 +458,14 @@ function setEventHandlers() {
       else{
         //Occurs when restoring a window
         //Window already created, dom must exists, update it and fire event to set it as normal
+        for (let i = 0; i < windowToRestore.window.tabs.length; i++){
 
-        for (let tab of windowToRestore.window.tabs){
-          //TODO Can be optimized
-          tabClosedProcedure(tab.id, windowToRestore.window.id, windowToRestore.id)
+          removeTab(windowToRestore.window.tabs[i], windowToRestore.id)
+            .then(undefined, error => {
+              //TODO manage error
+              console.log(error)
+            });
+          removeTabFromDom(windowToRestore.id, windowToRestore.window.tabs[i].id)
         }
 
         //Update generic savedWindow with real data, id of genric window is correct
@@ -468,7 +480,7 @@ function setEventHandlers() {
           console.log(error)
         })
         //Delete old window entry on the state
-        windowMap.delete(windowToRestore.window.id)
+        generalWindowMap.delete(windowToRestore.id)
         setDomWindowTitleColor(existentWindow.id, "white", false, existentWindow.window.id)
 
         //TODO could update each tab instead of deleting old and creating then new ones
@@ -498,13 +510,14 @@ function setEventHandlers() {
     }else{
       savedWindow.status = StatusCodes.windowCLosed
       //Update it in storage
-  
+      generalWindowMap.set(savedWindow.id, savedWindow)
+      windowMap.delete(windowId)
       removeWindow(savedWindow.id).then(storeWindow(savedWindow), error =>{
         //TODO log it
         console.log(error)
       })
       
-      setDomWindowTitleColor(savedWindow.id, "#b3b3b3", true, savedWindow.window.id)
+      setDomWindowTitleColor(savedWindow.id, "#b3b3b3", true, savedWindow.id)
       
       for (let tab of savedWindow.window.tabs){
         setDomTabTitleColor(savedWindow.id, tab.id, "#b3b3b3")
@@ -517,7 +530,7 @@ function setEventHandlers() {
 }
 
 function closeWindow(windowTempId){
-  let savedWindow = windowMap.get(windowTempId)
+  let savedWindow = generalWindowMap.get(windowTempId)
   //Update it in storage
   removeWindow(savedWindow.id).then(undefined, error =>{
     //TODO log it
@@ -530,7 +543,7 @@ function closeWindow(windowTempId){
       console.log(error)
     });
   }
-  windowMap.delete(windowTempId)
+  generalWindowMap.delete(windowTempId)
 
   let elementArray = windowDeletedEventMap.get(savedWindow.id)
   let length = elementArray.length;
@@ -547,8 +560,8 @@ function closeWindow(windowTempId){
   }
 }
 
-function restoreWindow(windowTempId){
-  let savedWindow = windowMap.get(windowTempId)
+function restoreWindow(windowId){
+  let savedWindow = generalWindowMap.get(windowId)
   windowToRestore = savedWindow
   let urls = savedWindow.window.tabs.map(element =>{
     if (!element.url.startsWith("about"))
@@ -712,7 +725,7 @@ function init() {
       if (!savedWindowFoundIdList.some(element => savedState.id == element)) {
         //TODO Make separate array for not existing windows
         savedState.window.id = createWindowId()
-        finalState.set(savedState.window.id, new SavedWindow(savedState.name, savedState.window, savedState.id, StatusCodes.windowCLosed))
+        generalWindowMap.set(savedState.id, new SavedWindow(savedState.name, savedState.window, savedState.id, StatusCodes.windowCLosed))
       }
     })
 
@@ -765,14 +778,14 @@ function findWindowById(id, windows) {
 function distributeState() {
   callBackList.forEach(callback => {
     //console.log("executing callback")
-    callback(windowMap)
+    callback([windowMap, generalWindowMap])
   })
 }
 
 function getWindowState() {
 
   if (windowMap) {
-    return windowMap
+    return [windowMap, generalWindowMap]
   }
   else {
     return new Promise((resolve, reject) => {

@@ -31,16 +31,18 @@ function init(){
 
 }
 
-function populatePanel(list){
+function populatePanel(mapArr){
     backgroundPage.subscriveToContentEvent(contentBox)
     contentBox.addEventListener("WM_windowAdded", function (event){
         contentBox.appendChild(createElement(event.WM_window))
 
     })
     
-    list.forEach(value => {
+    mapArr.forEach(value => {
+        value.forEach(element=>{
+            contentBox.appendChild(createElement(element))
+        })
         
-        contentBox.appendChild(createElement(value))
     });
     
 }
@@ -98,6 +100,10 @@ function createTab(element, savedWindow){
     li.addEventListener("WM_tabColorUpdated", (event) =>{
         li.style.color = event.WM_color
     })
+    //Set tab closed color
+    if (savedWindow.status == backgroundPage.StatusCodes.windowCLosed){
+        li.style.color =  "#b3b3b3" 
+    }
     
     li.innerText = " " + element.title || element.url
     li.value = element.url
@@ -139,6 +145,7 @@ function createTitle(name, savedWindow, windowState){
     })
     let titleContainer = document.createElement("DIV")
     titleContainer.WM_windowId = savedWindow.window.id
+    titleContainer.WM_savedWindowId = savedWindow.id
     let title = document.createElement("LABEL")
     elementContainer.addEventListener("contextmenu", function (event){
         event.preventDefault()
@@ -190,7 +197,7 @@ function createTitle(name, savedWindow, windowState){
         
                         event.target.parentElement.remove()
                         event.target.remove()
-                        backgroundPage.closeWindow(titleContainer.WM_windowId)
+                        backgroundPage.closeWindow(titleContainer.WM_savedWindowId)
                     }
                     menu.appendChild(option1)
 
@@ -208,7 +215,7 @@ function createTitle(name, savedWindow, windowState){
         title.style.color =  "#b3b3b3" 
 
         //Create button to open window
-        let button = createOpenButton(savedWindow.window.id)
+        let button = createOpenButton(savedWindow.id)
         titleContainer.appendChild(button)
     }
 
