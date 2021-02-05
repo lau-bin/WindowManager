@@ -460,7 +460,7 @@ function setEventHandlers() {
         //Window already created, dom must exists, update it and fire event to set it as normal
         for (let i = 0; i < windowToRestore.window.tabs.length; i++){
 
-          removeTab(windowToRestore.window.tabs[i], windowToRestore.id)
+          removeTab(windowToRestore.window.tabs[i].id, windowToRestore.id)
             .then(undefined, error => {
               //TODO manage error
               console.log(error)
