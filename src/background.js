@@ -14,6 +14,8 @@ Called when the item has been created, or when creation failed due to an error.
 We'll just log success/failure here.
 */
 
+const CURRENT_VERSION = "2.0.0"
+var initialized = false;
 
 function onCreated() {
   if (browser.runtime.lastError) {
@@ -64,8 +66,8 @@ Object.defineProperty(this, "SWType", {
   writable: false
 })
 
-var windowMap //Map
-var generalWindowMap = new Map()//Map
+var windowMap = new Map() //Map
+var generalWindowMap = new Map()//Map of closed windows
 var idList = [] //save all ids to find available when needed
 var callBackList = [] //Callbacks from sidebars requesting data
 var windowToRestore = null
@@ -77,6 +79,7 @@ var contentEventMap = []
 var windowDeletedEventMap = new Map()
 
 var tabUpdateInfo = new Map()
+var index = 0;
 
 
 //Events
@@ -88,6 +91,7 @@ var WM_tabColorUpdated = createEvent("WM_tabColorUpdated")
 var WM_windowAdded = createEvent("WM_windowAdded")
 var WM_windowUpdated = createEvent("WM_windowUpdated")
 var WM_windowDeleted = createEvent("WM_windowDeleted")
+var WM_tabMoved = createEvent("WM_tabMoved")
 
 const dateFormat = Intl.DateTimeFormat(undefined, {
   year: 'numeric',
@@ -97,12 +101,13 @@ const dateFormat = Intl.DateTimeFormat(undefined, {
   minute: 'numeric'
 })
 
-function SavedWindow(name, window, id, status) {
+function SavedWindow(name, window, id, status, index) {
   this.name = name ? name : dateFormat.format(new Date())
   this.id = id
   this.window = window
   this.status = status ? status : 0
   this.SWType = SWType.window //Reserved for storage keyword
+  this.index = index;
 }
 
 function TabState(url, favicon, title) {
@@ -111,21 +116,6 @@ function TabState(url, favicon, title) {
   this.title = title
 }
 
-//Store window in local storage
-function storeWindowAndTabs(savedWindow) {
-  let tabs = savedWindow.window.tabs
-  storeWindow(savedWindow).then(undefined, error => {
-    //TODO log error
-    console.log(error)
-  })
-
-  for (let tab of tabs) {
-    storeTab(tab, savedWindow.id).then(undefined, error => {
-      //TODO log error
-      console.log(error)
-    })
-  }
-}
 
 function storeWindow(savedWindow) {
   if (!savedWindow.window.incognito){
@@ -352,7 +342,7 @@ function setEventHandlers() {
       tabInfo.title = tab.title
     }
     window = windowMap.get(tab.windowId)
-    if (window && window.status != 4){
+    if (window /*&& window.status != 4*/){
       deleteTab(tabId, tab.windowId)
       addtab(tab, window.id)
   
@@ -397,6 +387,26 @@ function setEventHandlers() {
       })
     }
   })
+    //Tab moved in window
+    browser.tabs.onMoved.addListener((tabId, moveInfo) => {
+      let savedWindow = windowMap.get(moveInfo.windowId)
+      let tab = savedWindow.window.tabs.find(tab => tab.id === tabId)
+      storeTab(tab, savedWindow.id)
+  
+      let elementArray = tabEventMap.get(window.id).get(tabId)
+      WM_tabMoved.WM_tab = tab
+      let length = elementArray.length;
+      for (let i = 0; i < length; i++) {
+        if (isObjDead(elementArray[i])) {
+          elementArray.splice(i, 1)
+          length--
+          i--
+        }
+        else {
+          fireEvent(elementArray[i], WM_tabMoved)
+        }
+      }
+    })
   //Tab detached
   browser.tabs.onDetached.addListener((tabId, detachInfo) => {
     if (!detachInfo.isWindowClosing) {
@@ -431,6 +441,7 @@ function setEventHandlers() {
         window.tabs = existentWindow.window.tabs
         existentWindow.window = window
         existentWindow.status = StatusCodes.normal
+        existentWindow.index = index++;
 
         setWindowValue(window.id, existentWindow.id).then(() => {
           storeWindow(existentWindow).then(undefined, error =>{
@@ -471,6 +482,7 @@ function setEventHandlers() {
         //Update generic savedWindow with real data, id of genric window is correct
         existentWindow.status = StatusCodes.normal
         existentWindow.name = windowToRestore.name
+        existentWindow.index = windowToRestore.index
 
         setWindowValue(existentWindow.window.id, existentWindow.id).then(removeWindow(existentWindow.id).then(storeWindow(existentWindow), error =>{
           //TODO log it
@@ -563,7 +575,7 @@ function closeWindow(windowTempId){
 function restoreWindow(windowId){
   let savedWindow = generalWindowMap.get(windowId)
   windowToRestore = savedWindow
-  let urls = savedWindow.window.tabs.map(element =>{
+  let urls = savedWindow.window.tabs.sort((a,b)=>(a.index - b.index)).map(element =>{
     if (!element.url.startsWith("about"))
       return element.url
     else return null
@@ -640,8 +652,14 @@ let window = {}
   return persistentId
 }
 
-function setWindowName(name, windowId) {
-  let savedWindow = windowMap.get(windowId)
+function setWindowName(name, windowId, closed) {
+  let savedWindow; 
+
+  if (closed){
+    savedWindow = generalWindowMap.get(windowId)
+  }else{
+    savedWindow = windowMap.get(windowId)
+  }
   removeWindow(savedWindow.id).then(() => {
     savedWindow.name = name
     storeWindow(savedWindow).then(undefined, error => {
@@ -679,83 +697,195 @@ function isObjDead(obj) {
   return false
 }
 
-function init() {
+//Fix the storage when updating versions of the extension
+async function fixStorage(){
+  let result = await browser.storage.local.get({version:"empty"})
+  switch(result.version){
+    case CURRENT_VERSION:
+      return;
+    case "empty":
+    //new install or v1.0.0
+    let storage = await browser.storage.local.get(null)
+    if (storage){
+      //v1.0.0
+      console.log("v1.0.0")
+      let storageArr = Object.entries(storage);
+      await storageArr.forEach(async ([key,value])=>{
+        if (key.startsWith("w_")){
+          value.index = index++;
+          await browser.storage.local.set({key,value})
+        }
+      })
+    }
+    break;
+    default:
+      console.log("Error fixing storage")
+  }
+  await browser.storage.local.set({version:CURRENT_VERSION})
+}
+
+async function init() {
   //console.log("init")
   //Move this if i use init to reload since will register handlers again
-  setEventHandlers() //Will have problems if events are multithreaded
+  //TODO find a way to execute this only on update
+  await fixStorage()
 
-  let savedState = getSavedState()
-  let currentState = getCurrentState()
+  let savedState = await getSavedState()
+  let currentWindows = await getCurrentState()
+  let updatedState = []
+  let newState = []
 
-  Promise.all([savedState, currentState]).then(async function (values) {
-    let savedState = values[0]
-    let currentState = values[1]
-    let finalState = new Map()
+  //Checks
+  let savedWindowFoundIdList = [] //Save all ids of the stored windows that still exists
+  let windowsRequestingIdList = []
 
-    //Checks
-    let savedWindowFoundIdList = [] //Save all ids of the stored windows that still exists
-    let windowsRequestingIdList = []
+  //Compare existing windows with saved ones
+  for (let i = 0; i < currentWindows.length; i++) {
+    await browser.sessions.getWindowValue(currentWindows[i].id, "id").then(windowId => {
+      windowId = parseInt(windowId, 10)
+      if (windowId) {//Se le agrego una id anteriormente
+        idList.push(windowId)
+        let savedWindow = findWindowById(windowId, savedState)
 
-    //Compare existing windows with saved ones
-    for (let i = 0; i < currentState.length; i++) {
-      await browser.sessions.getWindowValue(currentState[i].id, "id").then(windowId => {
-        windowId = parseInt(windowId, 10)
-        if (windowId) {//Se le agrego una id anteriormente
-          idList.push(windowId)
-          let savedWindow = findWindowById(windowId, savedState)
-
-          if (savedWindow) {//The save was found
-            savedWindowFoundIdList.push(savedWindow.id)
-            finalState.set(currentState[i].id, new SavedWindow(savedWindow.name, currentState[i], windowId))
-
-          }
-          else {//Save was lost, this shouldnt happen logg it
-            finalState.set(currentState[i].id, new SavedWindow(undefined, currentState[i], windowId, StatusCodes.saveLost))
-
-          }
+        if (savedWindow) {//The save was found
+          savedWindowFoundIdList.push(savedWindow.id)
+          updatedState.push([new SavedWindow(savedWindow.name, currentWindows[i], windowId, undefined, savedWindow.index), savedWindow])
+          setIndexMaxValue(savedWindow.index)
         }
-        else {//Windows doesnt have saved id, first run or error
-          windowsRequestingIdList.push(currentState[i])
+        else {//Save was lost, this shouldnt happen logg it
+          newState.push(new SavedWindow(undefined, currentWindows[i], windowId, StatusCodes.saveLost, undefined))
+          console.log("Error: Save lost this shouldnt happen")
         }
-      })
-    }
-
-    //Add backup of non survivors to the list
-    savedState.forEach((savedState, key) => {
-      if (!savedWindowFoundIdList.some(element => savedState.id == element)) {
-        //TODO Make separate array for not existing windows
-        savedState.window.id = createWindowId()
-        generalWindowMap.set(savedState.id, new SavedWindow(savedState.name, savedState.window, savedState.id, StatusCodes.windowCLosed))
+      }
+      else {//Windows doesnt have saved id, first run or error
+        windowsRequestingIdList.push(currentWindows[i])
+        console.log("Error: Error window doesnt have saved id")
       }
     })
+  }
 
-    //Add existent windows without id
-    for (let i = 0; i < windowsRequestingIdList.length; i++) {
-      let id = createWindowId()
+  //Add backup of non survivors to the list
+  savedState.forEach((savedState, key) => {
+    if (!savedWindowFoundIdList.some(element => savedState.id == element)) {
+      //TODO Make separate array for not existing windows
+      savedState.window.id = createWindowId()
+      generalWindowMap.set(savedState.id, new SavedWindow(savedState.name, savedState.window, savedState.id, StatusCodes.windowCLosed, savedState.index))
+      setIndexMaxValue(savedState.index)
 
-      finalState.set(windowsRequestingIdList[i].id, new SavedWindow(undefined, windowsRequestingIdList[i], id, StatusCodes.newWindow))
-      setWindowValue(windowsRequestingIdList[i].id, id).then(undefined, (error) => {
-        //TODO Mark error on window and log (error ading id to window)
-        console.log(error)
-      })
     }
-
-    windowMap = finalState
-    saveState(finalState)
-    distributeState()
   })
 
+  //Add existent windows without id
+  for (let i = 0; i < windowsRequestingIdList.length; i++) {
+    let id = createWindowId()
+
+    newState.push(new SavedWindow(undefined, windowsRequestingIdList[i], id, StatusCodes.newWindow, undefined))
+    setWindowValue(windowsRequestingIdList[i].id, id).then(undefined, (error) => {
+      //TODO Mark error on window and log (error ading id to window)
+      console.log(error)
+    })
+  }
+
+  // let closedWindows = JSON.stringify(generalWindowMap, replacer)
+  // let openWindows = JSON.stringify(finalState, replacer)
+  // download("closedWindows", closedWindows)
+  // download("openWindows", openWindows)
+
+
+  updateSavedState(updatedState)
+  saveState(newState)
+  distributeState()
+  setEventHandlers() //Will have problems if a window is modified while the extension initializes
+  initialized = true;
+}
+//Needed to set an unused index to new windows
+function setIndexMaxValue(value){
+  if (index <= value){
+    index = value + 1;
+  }
+}
+
+function download(filename, text) {
+  var blob = new Blob([text], {type: 'text/plain;charset=utf-8'})
+
+  browser.downloads.download(  {
+    url: URL.createObjectURL(blob),
+    filename: filename+'.txt',
+});
+}
+
+function replacer(key, value) {
+  if(value instanceof Map) {
+    return {
+      dataType: 'Map',
+      value: Array.from(value.entries()), // or with spread: value: [...value]
+    };
+  } else {
+    return value;
+  }
+}
+
+function reviver(key, value) {
+  if(typeof value === 'object' && value !== null) {
+    if (value.dataType === 'Map') {
+      return new Map(value.value);
+    }
+  }
+  return value;
 }
 
 function setWindowValue(windowId, id) {
   return browser.sessions.setWindowValue(windowId, "id", String(id))
 }
 
+function saveState(state){
+  state.forEach(savedWindow=>{
+    //Set index after its value is bigger than any other (old) saved window
+    savedWindow.index = index++;
+    windowMap.set(savedWindow.window.id, savedWindow)
 
-function saveState(state) {
-  for (let savedWindow of state.values()) {
-    storeWindowAndTabs(savedWindow)
-  }
+    let tabs = savedWindow.window.tabs
+    storeWindow(savedWindow).then(undefined, error => {
+      //TODO log error
+      console.log(error)
+    })
+  
+    for (let tab of tabs) {
+      storeTab(tab, savedWindow.id).then(undefined, error => {
+        //TODO log error
+        console.log(error)
+      })
+    }
+  })
+
+}
+
+function updateSavedState(state) {
+  state.forEach(([currentWindow, savedWindow]) =>{
+    windowMap.set(currentWindow.window.id, currentWindow)
+    let currentTabs = currentWindow.window.tabs
+    let oldTabs = savedWindow.window.tabs
+    //Old window gets replaced
+    storeWindow(currentWindow).then(undefined, error => {
+      //TODO log error
+      console.log(error)
+    })
+    
+    for (let tab of currentTabs) {
+      storeTab(tab, currentWindow.id).then(undefined, error => {
+        //TODO log error
+        console.log(error)
+      })
+    }
+    //Delete after saving new tabs so data is not lost on crash altough possibly duplicated
+    for (let tab of oldTabs){
+      removeTab(tab.id, savedWindow.id)
+      .then(undefined, error => {
+        //TODO manage error
+        console.log(error)
+      });    
+    }
+  })
 }
 
 function createWindowId() {
@@ -784,7 +914,7 @@ function distributeState() {
 
 function getWindowState() {
 
-  if (windowMap) {
+  if (initialized) {
     return [windowMap, generalWindowMap]
   }
   else {
@@ -828,7 +958,15 @@ function getSavedState() {
 
 function getCurrentState() {
   return browser.windows.getAll({ populate: true, windowTypes: ['normal'] }).then(windowList => {
-    return windowList
+    // return windowList.map(window=>{
+    //   let {id, incognito, tabs} = window
+    //   tabs = tabs.map(tab=>{
+    //     const {status, url, title, favIconUrl} = tab
+    //     return {status, url, title, favIconUrl}
+    //   })
+    //   return {id, incognito, tabs}
+    // })
+    return windowList;
   }, (error) => console.log(error))
 }
 
@@ -837,5 +975,10 @@ function openSidebar() {
   browser.sidebarAction.toggle()
 }
 
-browser.browserAction.onClicked.addListener(openSidebar);
+browser.browserAction.onClicked.addListener(()=>{
+
+  openSidebar()
+}
+  
+);
 init()

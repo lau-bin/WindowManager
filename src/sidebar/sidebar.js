@@ -37,12 +37,12 @@ function populatePanel(mapArr){
         contentBox.appendChild(createElement(event.WM_window))
 
     })
-    
-    mapArr.forEach(value => {
-        value.forEach(element=>{
-            contentBox.appendChild(createElement(element))
-        })
-        
+
+    let savedWindowArr = Array.from(mapArr[0].values())
+    savedWindowArr = savedWindowArr.concat(Array.from(mapArr[1].values()))
+    savedWindowArr = savedWindowArr.sort((a, b) => a.index - b.index)
+    savedWindowArr.forEach(element => {
+        contentBox.appendChild(createElement(element))   
     });
     
 }
@@ -64,12 +64,16 @@ function createElement(value){
     ul.addEventListener("WM_tabAdded", (event) =>{
         ul.appendChild(createTab(event.WM_tab, event.WM_savedWindow))
     })
+    ul.addEventListener("WM_tabMoved", function (){
+
+    })
     
     return title
 }
 
 function createTab(element, savedWindow){
     let li = document.createElement("LI")
+    li.WM_tabIndex = element.index
     //Add event handlers
     li.addEventListener("click", function (){
         browser.tabs.get(element.id).then(tab =>{
@@ -292,7 +296,11 @@ function createTitle(name, savedWindow, windowState){
             let name = event.target.value
             if (name && name.length){
                 let formattedName = name.charAt(0).toUpperCase() + name.slice(1)
-                backgroundPage.setWindowName(formattedName, savedWindow.window.id)
+                if (titleContainer.WM_windowState == backgroundPage.StatusCodes.windowCLosed){
+                    backgroundPage.setWindowName(formattedName, savedWindow.id, true)
+                }else{
+                    backgroundPage.setWindowName(formattedName, savedWindow.window.id, false)
+                }
                 event.target.parentElement.innerText = formattedName
                 event.target.parentElement.blur()
             }
